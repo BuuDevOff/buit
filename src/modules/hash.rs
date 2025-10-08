@@ -1,10 +1,10 @@
 use crate::cli::HashArgs;
 use crate::utils::http::HttpClient;
 use anyhow::Result;
+use blake3;
 use console::style;
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest as Sha2Digest};
-use blake3;
+use sha2::{Digest as Sha2Digest, Sha256};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HashResult {
     pub hash: String,
@@ -24,7 +24,11 @@ pub struct CrackResult {
     pub method: String,
 }
 pub async fn run(args: HashArgs) -> Result<()> {
-    println!("{} Hash analysis: {}", style("🔒").cyan(), style(&args.hash).yellow().bold());
+    println!(
+        "{} Hash analysis: {}",
+        style("🔒").cyan(),
+        style(&args.hash).yellow().bold()
+    );
     let client = HttpClient::new()?;
     let mut result = HashResult {
         hash: args.hash.clone(),
@@ -119,7 +123,10 @@ fn identify_hash(hash: &str) -> Vec<HashType> {
                     confidence: 95,
                     description: "MD5-based crypt(3)".to_string(),
                 });
-            } else if hash.starts_with("$2a$") || hash.starts_with("$2b$") || hash.starts_with("$2y$") {
+            } else if hash.starts_with("$2a$")
+                || hash.starts_with("$2b$")
+                || hash.starts_with("$2y$")
+            {
                 types.push(HashType {
                     name: "bcrypt".to_string(),
                     confidence: 95,
@@ -181,7 +188,10 @@ async fn check_md5_database(_client: &HttpClient, hash: &str) -> Result<Option<C
         ("e10adc3949ba59abbe56e057f20f883e", "123456"),
         ("25d55ad283aa400af464c76d713c07ad", "12345678"),
         ("d8578edf8458ce06fbc5bb76a58c5ca4", "qwerty"),
-        ("8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92", "hello"),
+        (
+            "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+            "hello",
+        ),
     ];
     for (known_hash, password) in &common_hashes {
         if known_hash.to_lowercase() == hash.to_lowercase() {
@@ -213,8 +223,18 @@ fn check_local_tables(hash: &str) -> Option<CrackResult> {
 }
 fn try_common_passwords(hash: &str) -> Option<CrackResult> {
     let common_passwords = [
-        "password", "123456", "12345678", "qwerty", "abc123", "password123",
-        "admin", "letmein", "welcome", "monkey", "dragon", "master"
+        "password",
+        "123456",
+        "12345678",
+        "qwerty",
+        "abc123",
+        "password123",
+        "admin",
+        "letmein",
+        "welcome",
+        "monkey",
+        "dragon",
+        "master",
     ];
     for password in &common_passwords {
         // SHA-256 (preferred over MD5)
@@ -228,7 +248,7 @@ fn try_common_passwords(hash: &str) -> Option<CrackResult> {
                 method: "Dictionary Attack (SHA-256)".to_string(),
             });
         }
-        
+
         // BLAKE3 (modern, fast hashing)
         let blake3_hash = format!("{}", blake3::hash(password.as_bytes()));
         if blake3_hash == hash.to_lowercase() {
@@ -250,7 +270,8 @@ fn display_hash_types(types: &[HashType]) {
             70..=89 => style(hash_type.confidence.to_string()).yellow(),
             _ => style(hash_type.confidence.to_string()).red(),
         };
-        println!("  {} {} ({}% confidence)",
+        println!(
+            "  {} {} ({}% confidence)",
             style("•").cyan(),
             style(&hash_type.name).bold(),
             confidence_color
@@ -262,8 +283,20 @@ fn display_crack_result(result: &CrackResult) {
     println!("\n{}", style("Crack Results:").green().bold());
     println!("{}", style("══════════════").cyan());
     if let Some(plaintext) = &result.plaintext {
-        println!("  {} {}", style("Plaintext:").yellow(), style(plaintext).green().bold());
-        println!("  {} {}", style("Source:").yellow(), style(&result.source).cyan());
-        println!("  {} {}", style("Method:").yellow(), style(&result.method).cyan());
+        println!(
+            "  {} {}",
+            style("Plaintext:").yellow(),
+            style(plaintext).green().bold()
+        );
+        println!(
+            "  {} {}",
+            style("Source:").yellow(),
+            style(&result.source).cyan()
+        );
+        println!(
+            "  {} {}",
+            style("Method:").yellow(),
+            style(&result.method).cyan()
+        );
     }
 }
