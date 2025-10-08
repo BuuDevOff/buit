@@ -1,7 +1,9 @@
 use crate::cli::GithubArgs;
-use crate::utils::http::HttpClient;
+use crate::config::Config;
+use crate::utils::http::{HttpClient, HttpError};
 use anyhow::Result;
 use console::style;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct GitHubResult {
@@ -9,6 +11,8 @@ pub struct GitHubResult {
     pub user_info: Option<UserInfo>,
     pub repositories: Vec<Repository>,
     pub secrets_found: Vec<Secret>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserInfo {
@@ -40,8 +44,13 @@ pub struct Secret {
     pub line: u32,
 }
 pub async fn run(args: GithubArgs) -> Result<()> {
-    println!("{} GitHub OSINT: {}", style("🔍").cyan(), style(&args.target).yellow().bold());
+    println!(
+        "{} GitHub OSINT: {}",
+        style("🔍").cyan(),
+        style(&args.target).yellow().bold()
+    );
     let client = HttpClient::new()?;
+    let config = Config::load()?;
     let username = extract_username(&args.target);
     println!("Analyzing user: {}", style(&username).cyan());
     let mut result = GitHubResult {
@@ -49,28 +58,47 @@ pub async fn run(args: GithubArgs) -> Result<()> {
         user_info: None,
         repositories: vec![],
         secrets_found: vec![],
+        warnings: Vec::new(),
+        errors: Vec::new(),
     };
-    result.user_info = get_user_info(&client, &username).await?;
+    if config.get_api_key("github_token").is_none() {
+        result
+            .warnings
+            .push("API key github_token missing; rate limits may apply".to_string());
+    }
+
+    let (user_info, mut warnings, mut errors) = get_user_info(&client, &username).await?;
+    result.user_info = user_info;
+    result.warnings.append(&mut warnings);
+    result.errors.append(&mut errors);
     if args.repos {
         println!("\n{} Fetching repositories...", style("📁").cyan());
-        result.repositories = get_repositories(&client, &username).await?;
+        let (repos, mut warnings, mut errors) = get_repositories(&client, &username).await?;
+        result.repositories = repos;
+        result.warnings.append(&mut warnings);
+        result.errors.append(&mut errors);
     }
     if args.secrets {
         println!("\n{} Scanning for secrets...", style("🔒").cyan());
-        result.secrets_found = scan_for_secrets(&client, &username).await?;
+        let (secrets, mut warnings, mut errors) = scan_for_secrets(&client, &username).await?;
+        result.secrets_found = secrets;
+        result.warnings.append(&mut warnings);
+        result.errors.append(&mut errors);
     }
     display_results(&result);
     Ok(())
 }
 fn extract_username(target: &str) -> String {
     if target.starts_with("https://github.com/") {
-        target.replace("https://github.com/", "")
+        target
+            .replace("https://github.com/", "")
             .split('/')
             .next()
             .unwrap_or(target)
             .to_string()
     } else if target.starts_with("github.com/") {
-        target.replace("github.com/", "")
+        target
+            .replace("github.com/", "")
             .split('/')
             .next()
             .unwrap_or(target)
@@ -79,139 +107,165 @@ fn extract_username(target: &str) -> String {
         target.to_string()
     }
 }
-async fn get_user_info(client: &HttpClient, username: &str) -> Result<Option<UserInfo>> {
+async fn get_user_info(
+    client: &HttpClient,
+    username: &str,
+) -> Result<(Option<UserInfo>, Vec<String>, Vec<String>)> {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
     let api_url = format!("https://api.github.com/users/{}", username);
+
     match client.get(&api_url).await {
         Ok(response) => {
             if let Ok(github_user) = serde_json::from_str::<serde_json::Value>(&response) {
-                if !github_user.get("message").is_some() {
-                    return Ok(Some(UserInfo {
-                        login: github_user.get("login")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(username)
-                            .to_string(),
-                        name: github_user.get("name")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        bio: github_user.get("bio")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        location: github_user.get("location")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        email: github_user.get("email")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        company: github_user.get("company")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
-                        public_repos: github_user.get("public_repos")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32,
-                        followers: github_user.get("followers")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32,
-                        following: github_user.get("following")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0) as u32,
-                    }));
-                } else {
-                    println!("{} User not found: {}", style("✗").red(), username);
-                    return Ok(None);
+                if github_user.get("message").is_some() {
+                    warnings.push(format!("GitHub user {} not found", username));
+                    return Ok((None, warnings, errors));
                 }
+
+                let user = UserInfo {
+                    login: github_user
+                        .get("login")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(username)
+                        .to_string(),
+                    name: github_user
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    bio: github_user
+                        .get("bio")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    location: github_user
+                        .get("location")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    email: github_user
+                        .get("email")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    company: github_user
+                        .get("company")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
+                    public_repos: github_user
+                        .get("public_repos")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                    followers: github_user
+                        .get("followers")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                    following: github_user
+                        .get("following")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32,
+                };
+
+                return Ok((Some(user), warnings, errors));
             }
+            errors.push("Failed to parse GitHub user payload".to_string());
         }
-        Err(_) => {
-            println!("{} API request failed, using demo data", style("⚠").yellow());
+        Err(HttpError::BadStatus { status, .. }) if status == StatusCode::NOT_FOUND => {
+            warnings.push(format!("GitHub user {} not found", username));
+        }
+        Err(err) => {
+            errors.push(format!("GitHub user request failed: {}", err));
         }
     }
-    Ok(Some(UserInfo {
-        login: username.to_string(),
-        name: Some("Demo User".to_string()),
-        bio: Some("Demo user profile".to_string()),
-        location: Some("Unknown".to_string()),
-        email: None,
-        company: None,
-        public_repos: 0,
-        followers: 0,
-        following: 0,
-    }))
+
+    Ok((None, warnings, errors))
 }
-async fn get_repositories(client: &HttpClient, username: &str) -> Result<Vec<Repository>> {
-    let mut repos = vec![];
-    let api_url = format!("https://api.github.com/users/{}/repos?sort=updated&per_page=10", username);
+
+async fn get_repositories(
+    client: &HttpClient,
+    username: &str,
+) -> Result<(Vec<Repository>, Vec<String>, Vec<String>)> {
+    let mut repos = Vec::new();
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+    let api_url = format!(
+        "https://api.github.com/users/{}/repos?sort=updated&per_page=10",
+        username
+    );
+
     match client.get(&api_url).await {
         Ok(response) => {
             if let Ok(github_repos) = serde_json::from_str::<serde_json::Value>(&response) {
                 if let Some(repo_array) = github_repos.as_array() {
                     for repo_data in repo_array.iter().take(10) {
                         repos.push(Repository {
-                            name: repo_data.get("name")
+                            name: repo_data
+                                .get("name")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown")
                                 .to_string(),
-                            description: repo_data.get("description")
+                            description: repo_data
+                                .get("description")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string()),
-                            language: repo_data.get("language")
+                            language: repo_data
+                                .get("language")
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string()),
-                            stars: repo_data.get("stargazers_count")
+                            stars: repo_data
+                                .get("stargazers_count")
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0) as u32,
-                            forks: repo_data.get("forks_count")
+                            forks: repo_data
+                                .get("forks_count")
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0) as u32,
-                            updated_at: repo_data.get("updated_at")
+                            updated_at: repo_data
+                                .get("updated_at")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown")
                                 .to_string(),
-                            url: repo_data.get("html_url")
+                            url: repo_data
+                                .get("html_url")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string(),
                         });
                     }
-                    return Ok(repos);
+                    return Ok((repos, warnings, errors));
                 }
+                warnings.push("GitHub repositories payload empty".to_string());
+            } else {
+                errors.push("Failed to parse GitHub repositories payload".to_string());
             }
         }
-        Err(_) => {
-            println!("{} Repositories API request failed", style("⚠").yellow());
+        Err(HttpError::BadStatus { status, .. }) if status == StatusCode::NOT_FOUND => {
+            warnings.push(format!("No repositories found for {}", username));
+        }
+        Err(err) => {
+            errors.push(format!("GitHub repositories request failed: {}", err));
         }
     }
-    repos.push(Repository {
-        name: format!("demo-project"),
-        description: Some("Demo repository".to_string()),
-        language: Some("Unknown".to_string()),
-        stars: 0,
-        forks: 0,
-        updated_at: "Unknown".to_string(),
-        url: format!("https://github.com/{}/demo-project", username),
-    });
-    Ok(repos)
+
+    Ok((repos, warnings, errors))
 }
-async fn scan_for_secrets(_client: &HttpClient, username: &str) -> Result<Vec<Secret>> {
-    let mut secrets = vec![];
-    secrets.push(Secret {
-        repo: format!("{}/old-project", username),
-        file: "config/database.yml".to_string(),
-        pattern: "password: admin123".to_string(),
-        line: 15,
-    });
-    secrets.push(Secret {
-        repo: format!("{}/web-app", username),
-        file: ".env".to_string(),
-        pattern: "API_KEY=sk-1234567890abcdef".to_string(),
-        line: 3,
-    });
-    Ok(secrets)
+
+async fn scan_for_secrets(
+    _client: &HttpClient,
+    username: &str,
+) -> Result<(Vec<Secret>, Vec<String>, Vec<String>)> {
+    let warnings = vec![format!(
+        "Secret scanning for {} not implemented; use dedicated tooling",
+        username
+    )];
+    Ok((Vec::new(), warnings, Vec::new()))
 }
 fn display_results(result: &GitHubResult) {
     println!("\n{}", style("GitHub OSINT Results:").green().bold());
     println!("{}", style("════════════════════").cyan());
     if let Some(user) = &result.user_info {
-        println!("  {} {}", style("Username:").yellow(), style(&user.login).cyan());
+        println!(
+            "  {} {}",
+            style("Username:").yellow(),
+            style(&user.login).cyan()
+        );
         if let Some(name) = &user.name {
             println!("  {} {}", style("Name:").yellow(), style(name).cyan());
         }
@@ -219,7 +273,11 @@ fn display_results(result: &GitHubResult) {
             println!("  {} {}", style("Bio:").yellow(), bio);
         }
         if let Some(location) = &user.location {
-            println!("  {} {}", style("Location:").yellow(), style(location).cyan());
+            println!(
+                "  {} {}",
+                style("Location:").yellow(),
+                style(location).cyan()
+            );
         }
         if let Some(email) = &user.email {
             println!("  {} {}", style("Email:").yellow(), style(email).cyan());
@@ -227,7 +285,8 @@ fn display_results(result: &GitHubResult) {
         if let Some(company) = &user.company {
             println!("  {} {}", style("Company:").yellow(), style(company).cyan());
         }
-        println!("  {} {} public, {} followers, {} following",
+        println!(
+            "  {} {} public, {} followers, {} following",
             style("Stats:").yellow(),
             style(user.public_repos.to_string()).green(),
             style(user.followers.to_string()).green(),
@@ -237,7 +296,8 @@ fn display_results(result: &GitHubResult) {
     if !result.repositories.is_empty() {
         println!("\n{}", style("Repositories:").yellow());
         for repo in &result.repositories {
-            println!("  • {} (⭐ {}, 🍴 {})",
+            println!(
+                "  • {} (⭐ {}, 🍴 {})",
                 style(&repo.name).cyan().bold(),
                 repo.stars,
                 repo.forks
@@ -254,9 +314,26 @@ fn display_results(result: &GitHubResult) {
     if !result.secrets_found.is_empty() {
         println!("\n{}", style("⚠ Potential Secrets Found:").red().bold());
         for secret in &result.secrets_found {
-            println!("  {} {}:{}", style("⚠").red(), style(&secret.repo).yellow(), secret.line);
+            println!(
+                "  {} {}:{}",
+                style("⚠").red(),
+                style(&secret.repo).yellow(),
+                secret.line
+            );
             println!("    File: {}", style(&secret.file).cyan());
             println!("    Pattern: {}", style(&secret.pattern).red());
+        }
+    }
+    if !result.warnings.is_empty() {
+        println!("\n{}", style("Warnings:").yellow());
+        for warning in &result.warnings {
+            println!("  {} {}", style("⚠").yellow(), warning);
+        }
+    }
+    if !result.errors.is_empty() {
+        println!("\n{}", style("Errors:").red());
+        for error in &result.errors {
+            println!("  {} {}", style("✗").red(), error);
         }
     }
 }
