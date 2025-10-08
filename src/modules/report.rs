@@ -1,50 +1,63 @@
 use crate::cli::ReportArgs;
 use anyhow::Result;
-use console::style;
-use std::fs;
 use chrono::Utc;
+use console::style;
 use handlebars::Handlebars;
 use serde_json::{json, Value};
+use std::fs;
 
 pub fn run(args: ReportArgs) -> Result<()> {
-    println!("{} Generating report: {}", style("📊").cyan(), style(&args.title).yellow().bold());
-    
+    println!(
+        "{} Generating report: {}",
+        style("📊").cyan(),
+        style(&args.title).yellow().bold()
+    );
+
     let format = args.format.as_deref().unwrap_or("html");
-    let output_file = args.output.as_deref().unwrap_or_else(|| {
-        match format {
-            "html" => "report.html",
-            "markdown" => "report.md", 
-            "pdf" => "report.pdf",
-            _ => "report.html"
-        }
+    let output_file = args.output.as_deref().unwrap_or_else(|| match format {
+        "html" => "report.html",
+        "markdown" => "report.md",
+        "pdf" => "report.pdf",
+        _ => "report.html",
     });
-    
+
     println!("📄 Format: {}", style(format).cyan());
     println!("💾 Output: {}", style(output_file).yellow());
-    
+
     let report_data = generate_sample_report_data(&args.title)?;
-    
+
     match format {
         "html" => generate_html_report(&report_data, output_file)?,
         "markdown" => generate_markdown_report(&report_data, output_file)?,
         "pdf" => {
-            println!("{} PDF generation not implemented yet, generating HTML instead", style("⚠️").yellow());
+            println!(
+                "{} PDF generation not implemented yet, generating HTML instead",
+                style("⚠️").yellow()
+            );
             generate_html_report(&report_data, &output_file.replace(".pdf", ".html"))?;
-        },
+        }
         _ => {
-            println!("{} Unknown format '{}', using HTML", style("⚠️").yellow(), format);
+            println!(
+                "{} Unknown format '{}', using HTML",
+                style("⚠️").yellow(),
+                format
+            );
             generate_html_report(&report_data, output_file)?;
         }
     }
-    
-    println!("\n{} Report generated successfully: {}", style("✅").green(), style(style(output_file).green()).bold());
-    
+
+    println!(
+        "\n{} Report generated successfully: {}",
+        style("✅").green(),
+        style(style(output_file).green()).bold()
+    );
+
     Ok(())
 }
 
 fn generate_sample_report_data(title: &str) -> Result<Value> {
     let now = Utc::now();
-    
+
     Ok(json!({
         "title": title,
         "generated_at": now.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
@@ -68,7 +81,7 @@ fn generate_sample_report_data(title: &str) -> Result<Value> {
                         "details": "Certificate expires in 85 days"
                     },
                     {
-                        "type": "warning", 
+                        "type": "warning",
                         "title": "DNS Configuration",
                         "description": "Missing SPF record",
                         "details": "No SPF record found, emails may be marked as spam"
@@ -76,7 +89,7 @@ fn generate_sample_report_data(title: &str) -> Result<Value> {
                 ]
             },
             {
-                "title": "Port Scan Results", 
+                "title": "Port Scan Results",
                 "status": "completed",
                 "findings": [
                     {
@@ -95,7 +108,7 @@ fn generate_sample_report_data(title: &str) -> Result<Value> {
             },
             {
                 "title": "Subdomain Enumeration",
-                "status": "completed", 
+                "status": "completed",
                 "findings": [
                     {
                         "type": "info",
@@ -109,7 +122,7 @@ fn generate_sample_report_data(title: &str) -> Result<Value> {
         "recommendations": [
             "Configure SPF record for better email deliverability",
             "Consider implementing DMARC policy",
-            "Review subdomain security policies", 
+            "Review subdomain security policies",
             "Monitor SSL certificate expiration dates"
         ],
         "raw_data": {
@@ -304,75 +317,91 @@ fn generate_html_report(data: &Value, output_file: &str) -> Result<()> {
 
     let mut handlebars = Handlebars::new();
     handlebars.register_template_string("report", template)?;
-    
+
     let html = handlebars.render("report", data)?;
     fs::write(output_file, html)?;
-    
+
     Ok(())
 }
 
 fn generate_markdown_report(data: &Value, output_file: &str) -> Result<()> {
     let mut content = String::new();
-    
+
     // Header
-    content.push_str(&format!("# {}\n\n", data["title"].as_str().unwrap_or("OSINT Report")));
+    content.push_str(&format!(
+        "# {}\n\n",
+        data["title"].as_str().unwrap_or("OSINT Report")
+    ));
     content.push_str("**OSINT Security Report**\n\n");
-    
+
     // Metadata
     content.push_str("## 📋 Report Information\n\n");
-    content.push_str(&format!("- **Generated:** {}\n", data["generated_at"].as_str().unwrap_or("Unknown")));
-    content.push_str(&format!("- **Tool:** {} v{}\n", 
+    content.push_str(&format!(
+        "- **Generated:** {}\n",
+        data["generated_at"].as_str().unwrap_or("Unknown")
+    ));
+    content.push_str(&format!(
+        "- **Tool:** {} v{}\n",
         data["generated_by"].as_str().unwrap_or("BUIT"),
         data["version"].as_str().unwrap_or("1.0.2")
     ));
-    content.push_str(&format!("- **Duration:** {}\n\n", 
-        data["raw_data"]["scan_duration"].as_str().unwrap_or("Unknown")
+    content.push_str(&format!(
+        "- **Duration:** {}\n\n",
+        data["raw_data"]["scan_duration"]
+            .as_str()
+            .unwrap_or("Unknown")
     ));
-    
+
     // Summary
     content.push_str("## 📊 Summary\n\n");
     if let Some(summary) = data["summary"].as_object() {
         content.push_str("| Metric | Count |\n");
         content.push_str("|--------|-------|\n");
         for (key, value) in summary {
-            content.push_str(&format!("| {} | {} |\n", 
+            content.push_str(&format!(
+                "| {} | {} |\n",
                 key.replace('_', " ").to_uppercase(),
                 value.as_u64().unwrap_or(0)
             ));
         }
     }
     content.push_str("\n");
-    
+
     // Sections
     if let Some(sections) = data["sections"].as_array() {
         for section in sections {
-            content.push_str(&format!("## 🔍 {}\n\n", 
+            content.push_str(&format!(
+                "## 🔍 {}\n\n",
                 section["title"].as_str().unwrap_or("Section")
             ));
-            
+
             if let Some(findings) = section["findings"].as_array() {
                 for finding in findings {
                     let icon = match finding["type"].as_str().unwrap_or("info") {
                         "success" => "✅",
-                        "warning" => "⚠️", 
+                        "warning" => "⚠️",
                         "error" => "❌",
-                        _ => "ℹ️"
+                        _ => "ℹ️",
                     };
-                    
-                    content.push_str(&format!("### {} {}\n\n", icon, 
+
+                    content.push_str(&format!(
+                        "### {} {}\n\n",
+                        icon,
                         finding["title"].as_str().unwrap_or("Finding")
                     ));
-                    content.push_str(&format!("**{}**\n\n", 
+                    content.push_str(&format!(
+                        "**{}**\n\n",
                         finding["description"].as_str().unwrap_or("")
                     ));
-                    content.push_str(&format!("{}\n\n", 
+                    content.push_str(&format!(
+                        "{}\n\n",
                         finding["details"].as_str().unwrap_or("")
                     ));
                 }
             }
         }
     }
-    
+
     // Recommendations
     content.push_str("## 💡 Recommendations\n\n");
     if let Some(recommendations) = data["recommendations"].as_array() {
@@ -380,12 +409,12 @@ fn generate_markdown_report(data: &Value, output_file: &str) -> Result<()> {
             content.push_str(&format!("- {}\n", rec.as_str().unwrap_or("")));
         }
     }
-    
+
     content.push_str("\n---\n\n");
     content.push_str("*Report generated by BUIT (Buu Undercover Intelligence Toolkit)*\n");
     content.push_str("*For authorized security testing and research purposes only*\n");
-    
+
     fs::write(output_file, content)?;
-    
+
     Ok(())
 }
