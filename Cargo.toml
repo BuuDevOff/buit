@@ -65,7 +65,23 @@ tempfile = "3.8"
 zip = "0.6"
 tar = "0.4"
 flate2 = "1.0"
+governor = "0.6"
+backoff = "0.4"
+moka = { version = "0.12", features = ["future"] }
+utoipa = "4"
+utoipa-swagger-ui = { version = "6", features = ["axum"] }
+axum-prometheus = "0.9"
+tera = "1.20"
+keyring = "2"
+once_cell = "1.19"
 
 [features]
 default = []
 fast-json = ["simd-json"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
