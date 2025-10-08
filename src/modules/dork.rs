@@ -93,10 +93,17 @@ fn parse_dork_results(html: &str) -> Result<Vec<DorkEntry>> {
 fn display_results(results: &DorkResult) {
     println!("\n{}", style("Dork Results:").green().bold());
     println!("{}", style("═════════════").cyan());
-    println!("Found {} results", style(results.total_found.to_string()).yellow());
+    println!(
+        "Found {} results",
+        style(results.total_found.to_string()).yellow()
+    );
     for (i, entry) in results.results.iter().enumerate() {
         println!("\n{}. {}", style(i + 1).cyan(), style(&entry.title).bold());
-        println!("   {} {}", style("URL:").yellow(), style(&entry.url).blue().underlined());
+        println!(
+            "   {} {}",
+            style("URL:").yellow(),
+            style(&entry.url).blue().underlined()
+        );
         if !entry.snippet.is_empty() {
             println!("   {}", entry.snippet);
         }
