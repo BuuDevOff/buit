@@ -1,10 +1,10 @@
 use crate::cli::GeoipArgs;
-use crate::utils::http::HttpClient;
 use crate::utils::json;
+use crate::utils::{context::AppContext, http::HttpClient};
 use anyhow::Result;
 use console::style;
-use serde::{Deserialize, Serialize};
 use maxminddb::geoip2;
+use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::path::Path;
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,8 +41,12 @@ struct IpApiResponse {
     status: Option<String>,
 }
 pub async fn run(args: GeoipArgs) -> Result<()> {
-    println!("{} GeoIP lookup: {}", style("📍").cyan(), style(&args.ip).yellow().bold());
-    
+    println!(
+        "{} GeoIP lookup: {}",
+        style("📍").cyan(),
+        style(&args.ip).yellow().bold()
+    );
+
     let mut result = GeoIpResult {
         ip: args.ip.clone(),
         country: None,
@@ -65,7 +69,8 @@ pub async fn run(args: GeoipArgs) -> Result<()> {
         result.source = "MaxMind GeoLite2".to_string();
     } else {
         // Fallback to online API
-        let client = HttpClient::new()?;
+        let ctx = AppContext::current().execution();
+        let client = HttpClient::from_shared(ctx.http.clone());
         if let Ok(api_result) = lookup_online(&client, &args.ip, args.isp).await {
             result = api_result;
             result.source = "ip-api.com".to_string();
@@ -84,7 +89,7 @@ fn lookup_maxmind(ip: &str) -> Result<GeoIpResult> {
         "/var/lib/GeoIP/GeoLite2-City.mmdb",
         "./data/GeoLite2-City.mmdb",
     ];
-    
+
     for path in &db_paths {
         if Path::new(path).exists() {
             match maxminddb::Reader::open_readfile(path) {
@@ -94,13 +99,37 @@ fn lookup_maxmind(ip: &str) -> Result<GeoIpResult> {
                         Ok(city) => {
                             return Ok(GeoIpResult {
                                 ip: ip.to_string(),
-                                country: city.country.as_ref().and_then(|c| c.names.as_ref()).and_then(|n| n.get("en")).map(|s| s.to_string()),
-                                country_code: city.country.as_ref().and_then(|c| c.iso_code).map(|s| s.to_string()),
-                                region: city.subdivisions.as_ref().and_then(|s| s.get(0)).and_then(|r| r.names.as_ref()).and_then(|n| n.get("en")).map(|s| s.to_string()),
-                                city: city.city.as_ref().and_then(|c| c.names.as_ref()).and_then(|n| n.get("en")).map(|s| s.to_string()),
+                                country: city
+                                    .country
+                                    .as_ref()
+                                    .and_then(|c| c.names.as_ref())
+                                    .and_then(|n| n.get("en"))
+                                    .map(|s| s.to_string()),
+                                country_code: city
+                                    .country
+                                    .as_ref()
+                                    .and_then(|c| c.iso_code)
+                                    .map(|s| s.to_string()),
+                                region: city
+                                    .subdivisions
+                                    .as_ref()
+                                    .and_then(|s| s.get(0))
+                                    .and_then(|r| r.names.as_ref())
+                                    .and_then(|n| n.get("en"))
+                                    .map(|s| s.to_string()),
+                                city: city
+                                    .city
+                                    .as_ref()
+                                    .and_then(|c| c.names.as_ref())
+                                    .and_then(|n| n.get("en"))
+                                    .map(|s| s.to_string()),
                                 latitude: city.location.as_ref().and_then(|l| l.latitude),
                                 longitude: city.location.as_ref().and_then(|l| l.longitude),
-                                timezone: city.location.as_ref().and_then(|l| l.time_zone.as_ref()).map(|s| s.to_string()),
+                                timezone: city
+                                    .location
+                                    .as_ref()
+                                    .and_then(|l| l.time_zone.as_ref())
+                                    .map(|s| s.to_string()),
                                 isp: None,
                                 organization: None,
                                 asn: None,
@@ -115,7 +144,7 @@ fn lookup_maxmind(ip: &str) -> Result<GeoIpResult> {
             }
         }
     }
-    
+
     Err(anyhow::anyhow!("No MaxMind database found"))
 }
 
@@ -123,7 +152,7 @@ async fn lookup_online(client: &HttpClient, ip: &str, include_isp: bool) -> Resu
     let url = format!("http://ip-api.com/json/{}", ip);
     let response = client.get(&url).await?;
     let api_result: IpApiResponse = json::from_str(&response)?;
-    
+
     if api_result.status.as_deref() == Some("success") {
         Ok(GeoIpResult {
             ip: ip.to_string(),
@@ -146,11 +175,7 @@ async fn lookup_online(client: &HttpClient, ip: &str, include_isp: bool) -> Resu
 }
 
 fn assess_threat_level(ip: &str) -> Option<String> {
-    let suspicious_ranges = [
-        "10.", "192.168.", "172.16.",
-        "127.",
-        "0.", "255.",
-    ];
+    let suspicious_ranges = ["10.", "192.168.", "172.16.", "127.", "0.", "255."];
     for range in &suspicious_ranges {
         if ip.starts_with(range) {
             return Some("Private/Invalid".to_string());
@@ -161,13 +186,25 @@ fn assess_threat_level(ip: &str) -> Option<String> {
 fn display_results(result: &GeoIpResult) {
     println!("\n{}", style("GeoIP Results:").green().bold());
     println!("{}", style("══════════════").cyan());
-    println!("  {} {}", style("IP Address:").yellow(), style(&result.ip).cyan());
-    println!("  {} {}", style("Data Source:").yellow(), style(&result.source).cyan());
+    println!(
+        "  {} {}",
+        style("IP Address:").yellow(),
+        style(&result.ip).cyan()
+    );
+    println!(
+        "  {} {}",
+        style("Data Source:").yellow(),
+        style(&result.source).cyan()
+    );
     if let Some(country) = &result.country {
         println!("  {} {}", style("Country:").yellow(), style(country).cyan());
     }
     if let Some(code) = &result.country_code {
-        println!("  {} {}", style("Country Code:").yellow(), style(code).cyan());
+        println!(
+            "  {} {}",
+            style("Country Code:").yellow(),
+            style(code).cyan()
+        );
     }
     if let Some(region) = &result.region {
         println!("  {} {}", style("Region:").yellow(), style(region).cyan());
@@ -177,11 +214,19 @@ fn display_results(result: &GeoIpResult) {
     }
     if let (Some(lat), Some(lon)) = (result.latitude, result.longitude) {
         println!("  {} {}, {}", style("Coordinates:").yellow(), lat, lon);
-        println!("  {} https://maps.google.com/?q={},{}",
-            style("Map:").yellow(), lat, lon);
+        println!(
+            "  {} https://maps.google.com/?q={},{}",
+            style("Map:").yellow(),
+            lat,
+            lon
+        );
     }
     if let Some(timezone) = &result.timezone {
-        println!("  {} {}", style("Timezone:").yellow(), style(timezone).cyan());
+        println!(
+            "  {} {}",
+            style("Timezone:").yellow(),
+            style(timezone).cyan()
+        );
     }
     if let Some(isp) = &result.isp {
         println!("\n{}", style("ISP Information:").yellow());
@@ -201,11 +246,13 @@ fn display_results(result: &GeoIpResult) {
             "Medium" => "yellow",
             _ => "green",
         };
-        println!("  Threat Level: {}",
+        println!(
+            "  Threat Level: {}",
             match color {
                 "red" => style(threat).red(),
                 "yellow" => style(threat).yellow(),
                 _ => style(threat).green(),
-            });
+            }
+        );
     }
 }
