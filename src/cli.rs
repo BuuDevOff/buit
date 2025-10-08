@@ -3,18 +3,49 @@ use clap::{Parser, Subcommand};
 #[command(name = "buit")]
 #[command(author = "BuuDevOff <contact@buudevoff.fr>")]
 #[command(version = "1.0.5")]
-#[command(about = "BUIT - Buu Undercover Intelligence Toolkit - Advanced OSINT framework for security professionals", long_about = "BUIT is a comprehensive Open Source Intelligence (OSINT) toolkit designed for security professionals, researchers, and ethical hackers. This tool provides advanced reconnaissance capabilities for authorized security testing and investigations.
+#[command(
+    about = "BUIT - Buu Undercover Intelligence Toolkit - Advanced OSINT framework for security professionals",
+    long_about = "BUIT is a comprehensive Open Source Intelligence (OSINT) toolkit designed for security professionals, researchers, and ethical hackers. This tool provides advanced reconnaissance capabilities for authorized security testing and investigations.
 
 🌟 Star the repo: https://github.com/BuuDevOff/BUIT
 🚀 Contribute: https://github.com/BuuDevOff/BUIT
-💡 Each module has detailed help: buit <module> --help")]
+💡 Each module has detailed help: buit <module> --help"
+)]
 pub struct Cli {
     #[arg(long, help = "Start API server mode")]
     pub api: bool,
-    
+
     #[arg(long, default_value = "1337", help = "API server port")]
     pub port: u16,
-    
+    #[arg(long, default_value = "127.0.0.1", help = "API server host binding")]
+    pub host: String,
+    #[arg(long, help = "Require Authorization: Bearer <token> for API access")]
+    pub api_token: Option<String>,
+    #[arg(long, help = "Enable permissive CORS", default_value_t = false)]
+    pub cors_permissive: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "Output results as JSON",
+        conflicts_with = "ndjson"
+    )]
+    pub json: bool,
+    #[arg(
+        long,
+        global = true,
+        help = "Output results as NDJSON",
+        conflicts_with = "json"
+    )]
+    pub ndjson: bool,
+    #[arg(
+        long,
+        global = true,
+        help = "Silence non-essential console output",
+        default_value_t = false
+    )]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -68,7 +99,7 @@ pub enum Commands {
     Interactive,
     #[command(about = "Setup BUIT installation")]
     Setup,
-    
+
     // New high-priority modules
     #[command(about = "Reverse DNS lookup")]
     ReverseDns(ReverseDnsArgs),
@@ -80,12 +111,20 @@ pub enum Commands {
     BreachCheck(BreachCheckArgs),
     #[command(about = "Update BUIT to latest version")]
     Update(UpdateArgs),
+    #[cfg(debug_assertions)]
+    #[command(about = "(debug) Run quick health-checks across core modules")]
+    Check(CheckArgs),
 }
 #[derive(Parser, Clone)]
 pub struct UsernameArgs {
     #[arg(help = "Username to search for")]
     pub username: String,
-    #[arg(short, long, help = "Output format (json, csv, text)", default_value = "text")]
+    #[arg(
+        short,
+        long,
+        help = "Output format (json, csv, text)",
+        default_value = "text"
+    )]
     pub format: String,
     #[arg(short, long, help = "Output file")]
     pub output: Option<String>,
@@ -100,14 +139,24 @@ pub struct EmailArgs {
     pub breaches: bool,
     #[arg(short, long, help = "Check social media accounts")]
     pub social: bool,
-    #[arg(short, long, help = "Output format (json, csv, text)", default_value = "text")]
+    #[arg(
+        short,
+        long,
+        help = "Output format (json, csv, text)",
+        default_value = "text"
+    )]
     pub format: String,
 }
 #[derive(Parser, Clone)]
 pub struct SearchArgs {
     #[arg(help = "Search query")]
     pub query: String,
-    #[arg(short, long, help = "Search engine (duckduckgo, google, bing)", default_value = "duckduckgo")]
+    #[arg(
+        short,
+        long,
+        help = "Search engine (duckduckgo, google, bing)",
+        default_value = "duckduckgo"
+    )]
     pub engine: String,
     #[arg(short, long, help = "Number of results", default_value = "20")]
     pub limit: usize,
@@ -131,7 +180,12 @@ pub struct DorkArgs {
 pub struct SocialArgs {
     #[arg(help = "Target identifier (username, email, or phone)")]
     pub target: String,
-    #[arg(short, long, help = "Type of identifier (username, email, phone)", default_value = "username")]
+    #[arg(
+        short,
+        long,
+        help = "Type of identifier (username, email, phone)",
+        default_value = "username"
+    )]
     pub id_type: String,
     #[arg(short, long, help = "Platforms to search (comma-separated)")]
     pub platforms: Option<String>,
@@ -151,6 +205,12 @@ pub enum ConfigAction {
         service: String,
         #[arg(help = "API key")]
         key: String,
+        #[arg(
+            long,
+            help = "Store in operating system keychain",
+            default_value_t = false
+        )]
+        secure: bool,
     },
     #[command(about = "Set proxy configuration")]
     SetProxy {
@@ -163,7 +223,9 @@ pub enum ConfigAction {
     },
     #[command(about = "Set user agent")]
     SetUserAgent {
-        #[arg(help = "User agent preset (chrome, firefox, safari, edge, mobile, bot) or custom string")]
+        #[arg(
+            help = "User agent preset (chrome, firefox, safari, edge, mobile, bot) or custom string"
+        )]
         agent: String,
     },
     #[command(about = "Set thread count")]
@@ -214,6 +276,16 @@ pub struct DomainArgs {
     pub ssl: bool,
     #[arg(short, long, help = "Include WHOIS information")]
     pub whois: bool,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Parser, Clone)]
+pub struct CheckArgs {
+    #[arg(
+        value_name = "TOKENS",
+        help = "Sequence of values tagged with //username, //ip, //domaine (e.g. 'buit check buudever //username 8.8.8.8 //ip exemple.com //domaine')"
+    )]
+    pub tokens: Vec<String>,
 }
 #[derive(Parser, Clone)]
 pub struct LeaksArgs {
@@ -323,6 +395,8 @@ pub struct ReportArgs {
     pub format: Option<String>,
     #[arg(short, long, help = "Output file")]
     pub output: Option<String>,
+    #[arg(long, help = "Generate report from JSON results")]
+    pub from_json: Option<String>,
 }
 
 // New module argument structs
@@ -330,7 +404,12 @@ pub struct ReportArgs {
 pub struct ReverseDnsArgs {
     #[arg(help = "IP, CIDR block, or IP range to lookup")]
     pub target: String,
-    #[arg(short, long, help = "Number of concurrent threads", default_value = "10")]
+    #[arg(
+        short,
+        long,
+        help = "Number of concurrent threads",
+        default_value = "10"
+    )]
     pub threads: usize,
     #[arg(long, help = "Force processing of large IP ranges")]
     pub force: bool,
