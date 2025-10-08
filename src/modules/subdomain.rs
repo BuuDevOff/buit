@@ -1,16 +1,16 @@
 use crate::cli::SubdomainArgs;
-use crate::utils::http::HttpClient;
 use crate::config::Config;
+use crate::utils::http::HttpClient;
 use anyhow::Result;
 use console::style;
+use futures::stream::StreamExt;
+use futures_util::stream::FuturesUnordered;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use indicatif::{ProgressBar, ProgressStyle};
 use tokio::sync::Semaphore;
-use futures::stream::{StreamExt};
-use futures_util::stream::FuturesUnordered;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SubdomainResult {
     pub domain: String,
@@ -33,7 +33,11 @@ const MAX_SUBDOMAINS: usize = 50_000;
 const MAX_METHODS: usize = 10;
 
 pub async fn run(args: SubdomainArgs) -> Result<()> {
-    println!("{} Enumerating subdomains for: {}", style("🔍").cyan(), style(&args.domain).yellow().bold());
+    println!(
+        "{} Enumerating subdomains for: {}",
+        style("🔍").cyan(),
+        style(&args.domain).yellow().bold()
+    );
     let config = Config::load()?;
     let client = HttpClient::new()?;
     let mut all_subdomains = HashSet::new();
@@ -42,7 +46,7 @@ pub async fn run(args: SubdomainArgs) -> Result<()> {
     pb.set_style(
         ProgressStyle::default_spinner()
             .template("{spinner:.green} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     let use_crt = args.crt || (!args.crt && !args.brute);
     let use_brute = args.brute || (!args.crt && !args.brute);
@@ -53,10 +57,17 @@ pub async fn run(args: SubdomainArgs) -> Result<()> {
             Ok(subs) => {
                 if all_subdomains.len() + subs.len() > MAX_SUBDOMAINS {
                     let available_slots = MAX_SUBDOMAINS.saturating_sub(all_subdomains.len());
-                    println!("⚠️  Limiting crt.sh results to {} (max {} total)", available_slots, MAX_SUBDOMAINS);
+                    println!(
+                        "⚠️  Limiting crt.sh results to {} (max {} total)",
+                        available_slots, MAX_SUBDOMAINS
+                    );
                     all_subdomains.extend(subs.into_iter().take(available_slots));
                 } else {
-                    println!("{} Found {} subdomains from crt.sh", style("✓").green(), subs.len());
+                    println!(
+                        "{} Found {} subdomains from crt.sh",
+                        style("✓").green(),
+                        subs.len()
+                    );
                     all_subdomains.extend(subs);
                 }
             }
@@ -67,13 +78,20 @@ pub async fn run(args: SubdomainArgs) -> Result<()> {
         pb.set_message("Brute forcing common subdomains...");
         methods_used.push("DNS Brute Force".to_string());
         let brute_subs = brute_force_subdomains(&client, &args.domain).await?;
-        
+
         if all_subdomains.len() + brute_subs.len() > MAX_SUBDOMAINS {
             let available_slots = MAX_SUBDOMAINS.saturating_sub(all_subdomains.len());
-            println!("⚠️  Limiting brute force results to {} (max {} total)", available_slots, MAX_SUBDOMAINS);
+            println!(
+                "⚠️  Limiting brute force results to {} (max {} total)",
+                available_slots, MAX_SUBDOMAINS
+            );
             all_subdomains.extend(brute_subs.into_iter().take(available_slots));
         } else {
-            println!("{} Found {} subdomains from brute force", style("✓").green(), brute_subs.len());
+            println!(
+                "{} Found {} subdomains from brute force",
+                style("✓").green(),
+                brute_subs.len()
+            );
             all_subdomains.extend(brute_subs);
         }
     } else if all_subdomains.len() >= MAX_SUBDOMAINS {
@@ -93,7 +111,10 @@ pub async fn run(args: SubdomainArgs) -> Result<()> {
         println!("\n{} Testing subdomain availability...", style("⚡").cyan());
         test_subdomain_availability(&client, &mut subdomain_infos, &config).await;
     } else {
-        println!("\n{} Skipping availability testing (--skip-alive-check enabled)", style("⚡").yellow());
+        println!(
+            "\n{} Skipping availability testing (--skip-alive-check enabled)",
+            style("⚡").yellow()
+        );
     }
     let result = SubdomainResult {
         domain: args.domain.clone(),
@@ -113,7 +134,8 @@ async fn enumerate_crtsh(client: &HttpClient, domain: &str) -> Result<Vec<String
                 for entry in entries {
                     for line in entry.name_value.lines() {
                         let subdomain = line.trim().to_lowercase();
-                        if subdomain.ends_with(&format!(".{}", domain)) && !subdomain.contains('*') {
+                        if subdomain.ends_with(&format!(".{}", domain)) && !subdomain.contains('*')
+                        {
                             subdomains.insert(subdomain);
                         }
                     }
@@ -122,7 +144,7 @@ async fn enumerate_crtsh(client: &HttpClient, domain: &str) -> Result<Vec<String
         }
         Err(_) => {
             let common_subs = [
-                "www", "mail", "ftp", "admin", "api", "app", "blog", "dev", "test", "staging"
+                "www", "mail", "ftp", "admin", "api", "app", "blog", "dev", "test", "staging",
             ];
             for sub in &common_subs {
                 subdomains.insert(format!("{}.{}", sub, domain));
@@ -138,7 +160,7 @@ async fn brute_force_subdomains(_client: &HttpClient, domain: &str) -> Result<Ve
     pb.set_style(
         ProgressStyle::default_bar()
             .template("  [{bar:30.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
+            .unwrap(),
     );
     for word in wordlist {
         let subdomain = format!("{}.{}", word, domain);
@@ -154,20 +176,74 @@ async fn brute_force_subdomains(_client: &HttpClient, domain: &str) -> Result<Ve
 }
 fn get_subdomain_wordlist() -> Vec<&'static str> {
     vec![
-        "www", "mail", "ftp", "localhost", "webmail", "smtp", "pop", "ns1", "webdisk", "ns2",
-        "cpanel", "whm", "autodiscover", "autoconfig", "m", "imap", "test", "ns", "blog",
-        "pop3", "dev", "www2", "admin", "forum", "news", "vpn", "ns3", "mail2", "new",
-        "mysql", "old", "www1", "email", "img", "www3", "help", "shop", "owa", "en",
-        "start", "sms", "api", "exchange", "www4", "www5", "mx", "secure", "download",
-        "demo", "web", "beta", "www6", "search", "static", "ftp2", "www7", "mobile"
+        "www",
+        "mail",
+        "ftp",
+        "localhost",
+        "webmail",
+        "smtp",
+        "pop",
+        "ns1",
+        "webdisk",
+        "ns2",
+        "cpanel",
+        "whm",
+        "autodiscover",
+        "autoconfig",
+        "m",
+        "imap",
+        "test",
+        "ns",
+        "blog",
+        "pop3",
+        "dev",
+        "www2",
+        "admin",
+        "forum",
+        "news",
+        "vpn",
+        "ns3",
+        "mail2",
+        "new",
+        "mysql",
+        "old",
+        "www1",
+        "email",
+        "img",
+        "www3",
+        "help",
+        "shop",
+        "owa",
+        "en",
+        "start",
+        "sms",
+        "api",
+        "exchange",
+        "www4",
+        "www5",
+        "mx",
+        "secure",
+        "download",
+        "web",
+        "beta",
+        "www6",
+        "search",
+        "static",
+        "ftp2",
+        "www7",
+        "mobile",
     ]
 }
-async fn test_subdomain_availability(client: &HttpClient, subdomains: &mut [SubdomainInfo], config: &Config) {
+async fn test_subdomain_availability(
+    client: &HttpClient,
+    subdomains: &mut [SubdomainInfo],
+    config: &Config,
+) {
     let pb = ProgressBar::new(subdomains.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
             .template("  [{bar:30.green/blue}] {pos}/{len} Testing availability ({per_sec})")
-            .unwrap()
+            .unwrap(),
     );
     let semaphore = Arc::new(Semaphore::new(config.settings.max_threads));
     let pb = Arc::new(pb);
@@ -181,20 +257,18 @@ async fn test_subdomain_availability(client: &HttpClient, subdomains: &mut [Subd
         let results = Arc::clone(&results);
         let subdomain = subdomain_info.subdomain.clone();
         let future = async move {
-            let _permit = match tokio::time::timeout(
-                Duration::from_secs(30),
-                semaphore.acquire()
-            ).await {
-                Ok(Ok(permit)) => permit,
-                Ok(Err(e)) => {
-                    eprintln!("Failed to acquire semaphore: {}", e);
-                    return;
-                }
-                Err(_) => {
-                    eprintln!("Timeout waiting for semaphore");
-                    return;
-                }
-            };
+            let _permit =
+                match tokio::time::timeout(Duration::from_secs(30), semaphore.acquire()).await {
+                    Ok(Ok(permit)) => permit,
+                    Ok(Err(e)) => {
+                        eprintln!("Failed to acquire semaphore: {}", e);
+                        return;
+                    }
+                    Err(_) => {
+                        eprintln!("Timeout waiting for semaphore");
+                        return;
+                    }
+                };
             let test_url = format!("https://{}", subdomain);
             let mut alive = client.check_url(&test_url).await.unwrap_or(false);
             if !alive {
@@ -217,18 +291,34 @@ async fn test_subdomain_availability(client: &HttpClient, subdomains: &mut [Subd
     pb.finish_and_clear();
 }
 fn display_results(result: &SubdomainResult) {
-    println!("\n{}", style("Subdomain Enumeration Results:").green().bold());
+    println!(
+        "\n{}",
+        style("Subdomain Enumeration Results:").green().bold()
+    );
     println!("{}", style("══════════════════════════════").cyan());
-    println!("  {} {}", style("Domain:").yellow(), style(&result.domain).cyan());
-    println!("  {} {}", style("Total Found:").yellow(), style(result.total_found.to_string()).green());
+    println!(
+        "  {} {}",
+        style("Domain:").yellow(),
+        style(&result.domain).cyan()
+    );
+    println!(
+        "  {} {}",
+        style("Total Found:").yellow(),
+        style(result.total_found.to_string()).green()
+    );
     // Status info will be printed below
-    let alive_count = result.subdomains.iter()
+    let alive_count = result
+        .subdomains
+        .iter()
         .filter(|s| s.alive.unwrap_or(false))
         .count();
-    let dead_count = result.subdomains.iter()
+    let dead_count = result
+        .subdomains
+        .iter()
         .filter(|s| s.alive == Some(false))
         .count();
-    println!("  {} {} alive, {} unreachable",
+    println!(
+        "  {} {} alive, {} unreachable",
         style("Status:").yellow(),
         style(alive_count.to_string()).green(),
         style(dead_count.to_string()).red()
@@ -241,13 +331,25 @@ fn display_results(result: &SubdomainResult) {
             Some(false) => style("✗").red(),
             None => style("?").yellow(),
         };
-        println!("  {} {}", status_icon, style(&subdomain_info.subdomain).cyan());
+        println!(
+            "  {} {}",
+            status_icon,
+            style(&subdomain_info.subdomain).cyan()
+        );
     }
     if alive_count > 0 {
-        println!("\n{}", style("Live Subdomains for Further Investigation:").green().bold());
+        println!(
+            "\n{}",
+            style("Live Subdomains for Further Investigation:")
+                .green()
+                .bold()
+        );
         for subdomain_info in &result.subdomains {
             if subdomain_info.alive.unwrap_or(false) {
-                println!("  • https://{}", style(&subdomain_info.subdomain).blue().underlined());
+                println!(
+                    "  • https://{}",
+                    style(&subdomain_info.subdomain).blue().underlined()
+                );
             }
         }
     }
