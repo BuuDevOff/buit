@@ -1,5 +1,4 @@
 use crate::cli::SslCertArgs;
-use crate::utils::http::HttpClient;
 use anyhow::Result;
 use console::style;
 use serde::{Deserialize, Serialize};
@@ -12,96 +11,135 @@ pub struct SslCertInfo {
     pub tls_version: Option<String>,
     pub cipher_suite: Option<String>,
     pub certificate_info: Option<String>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
 }
 
 pub async fn run(args: SslCertArgs) -> Result<()> {
-    println!("{} SSL Certificate Analysis: {}:{}", 
-        style("🔐").cyan(), 
+    println!(
+        "{} SSL Certificate Analysis: {}:{}",
+        style("🔐").cyan(),
         style(&args.domain).yellow().bold(),
         style(args.port.to_string()).yellow()
     );
-    
+
     match check_ssl_connection(&args.domain, args.port).await {
-        Ok(cert_info) => {
+        Ok(cert_info) => display_results(&cert_info),
+        Err(e) => {
+            println!(
+                "{} Failed to analyze SSL certificate: {}",
+                style("❌").red(),
+                e
+            );
+            let cert_info = SslCertInfo {
+                domain: args.domain.clone(),
+                port: args.port,
+                connection_status: "Connection failed".to_string(),
+                tls_version: None,
+                cipher_suite: None,
+                certificate_info: None,
+                warnings: Vec::new(),
+                errors: vec![format!("TCP connection failed: {}", e)],
+            };
             display_results(&cert_info);
         }
-        Err(e) => {
-            println!("{} Failed to analyze SSL certificate: {}", style("❌").red(), e);
-            
-            // Provide basic SSL information using external service as fallback
-            if let Ok(external_info) = check_ssl_external(&args.domain, args.port).await {
-                display_results(&external_info);
-            }
-        }
     }
-    
+
     Ok(())
 }
 
 async fn check_ssl_connection(domain: &str, port: u16) -> Result<SslCertInfo> {
-    use tokio::net::TcpStream;
     use std::time::Duration;
-    
+    use tokio::net::TcpStream;
+
     // Try to establish a basic TCP connection first
     let addr = format!("{}:{}", domain, port);
-    let _stream = tokio::time::timeout(
-        Duration::from_secs(10),
-        TcpStream::connect(&addr)
-    ).await??;
-    
+    let _stream =
+        tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(&addr)).await??;
+
     // For now, return basic connection info
     Ok(SslCertInfo {
         domain: domain.to_string(),
         port,
-        connection_status: "Connected".to_string(),
-        tls_version: Some("TLS 1.2/1.3".to_string()),
-        cipher_suite: Some("Unknown".to_string()),
-        certificate_info: Some("Certificate present - use openssl for detailed analysis".to_string()),
-    })
-}
-
-async fn check_ssl_external(domain: &str, port: u16) -> Result<SslCertInfo> {
-    let _client = HttpClient::new()?;
-    
-    // Use SSL Labs API for detailed certificate analysis (demo data for now)
-    Ok(SslCertInfo {
-        domain: domain.to_string(),
-        port,
-        connection_status: "Analyzed via external service".to_string(),
-        tls_version: Some("TLS 1.2".to_string()),
-        cipher_suite: Some("ECDHE-RSA-AES128-GCM-SHA256".to_string()),
-        certificate_info: Some("Valid certificate issued by Let's Encrypt".to_string()),
+        connection_status: "Connected (TCP handshake only)".to_string(),
+        tls_version: None,
+        cipher_suite: None,
+        certificate_info: None,
+        warnings: vec![
+            "TLS handshake not performed; run `openssl s_client -connect host:port` for details"
+                .to_string(),
+        ],
+        errors: Vec::new(),
     })
 }
 
 fn display_results(cert_info: &SslCertInfo) {
-    println!("\n{}", style("SSL Certificate Analysis Results:").green().bold());
+    println!(
+        "\n{}",
+        style("SSL Certificate Analysis Results:").green().bold()
+    );
     println!("{}", style("═══════════════════════════════════").cyan());
-    
-    println!("  {} {}:{}", style("Target:").yellow(), cert_info.domain, cert_info.port);
-    println!("  {} {}", style("Status:").yellow(), 
-        if cert_info.connection_status.contains("Connected") { 
-            style(&cert_info.connection_status).green() 
-        } else { 
-            style(&cert_info.connection_status).yellow() 
+
+    println!(
+        "  {} {}:{}",
+        style("Target:").yellow(),
+        cert_info.domain,
+        cert_info.port
+    );
+    println!(
+        "  {} {}",
+        style("Status:").yellow(),
+        if cert_info.connection_status.contains("Connected") {
+            style(&cert_info.connection_status).green()
+        } else {
+            style(&cert_info.connection_status).yellow()
         }
     );
-    
+
     if let Some(tls_version) = &cert_info.tls_version {
-        println!("  {} {}", style("TLS Version:").yellow(), style(tls_version).cyan());
+        println!(
+            "  {} {}",
+            style("TLS Version:").yellow(),
+            style(tls_version).cyan()
+        );
     }
-    
+
     if let Some(cipher) = &cert_info.cipher_suite {
-        println!("  {} {}", style("Cipher Suite:").yellow(), style(cipher).cyan());
+        println!(
+            "  {} {}",
+            style("Cipher Suite:").yellow(),
+            style(cipher).cyan()
+        );
     }
-    
+
     if let Some(cert_info_str) = &cert_info.certificate_info {
-        println!("  {} {}", style("Certificate:").yellow(), style(cert_info_str).green());
+        println!(
+            "  {} {}",
+            style("Certificate:").yellow(),
+            style(cert_info_str).green()
+        );
     }
-    
+
     println!("\n{}", style("Recommendations:").yellow());
-    println!("  • Use 'openssl s_client -connect {}:{}' for detailed certificate analysis", cert_info.domain, cert_info.port);
+    println!(
+        "  • Use 'openssl s_client -connect {}:{}' for detailed certificate analysis",
+        cert_info.domain, cert_info.port
+    );
     println!("  • Check SSL Labs (ssllabs.com/ssltest) for comprehensive security analysis");
     println!("  • Verify certificate chain and expiration dates");
     println!("  • Ensure strong cipher suites are enabled");
+
+    if !cert_info.warnings.is_empty() {
+        println!("\n{}", style("Warnings:").yellow());
+        for warning in &cert_info.warnings {
+            println!("  {} {}", style("⚠").yellow(), warning);
+        }
+    }
+
+    if !cert_info.errors.is_empty() {
+        println!("\n{}", style("Errors:").red());
+        for error in &cert_info.errors {
+            println!("  {} {}", style("✗").red(), error);
+        }
+    }
 }
