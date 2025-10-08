@@ -1,12 +1,12 @@
-use anyhow::Result;
 use crate::utils::http::HttpClient;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AsnInfo {
-    pub asn: u32,
-    pub org: String,
+    pub asn: Option<u32>,
+    pub org: Option<String>,
     pub country: Option<String>,
     pub registry: Option<String>,
     pub allocated: Option<String>,
@@ -22,52 +22,61 @@ struct IpApiAsnResponse {
     country: Option<String>,
 }
 
-pub async fn lookup_asn(ip: IpAddr) -> Result<AsnInfo> {
+pub async fn lookup_asn(ip: IpAddr) -> Result<Option<AsnInfo>> {
     let client = HttpClient::new()?;
-    
-    // Try ip-api.com first
-    if let Ok(info) = lookup_asn_ipapi(&client, ip).await {
-        return Ok(info);
-    }
-    
-    // Fallback to demo data
-    Ok(AsnInfo {
-        asn: 15169,
-        org: "Google LLC".to_string(),
-        country: Some("US".to_string()),
-        registry: Some("ARIN".to_string()),
-        allocated: Some("2000-03-30".to_string()),
-        prefix: Some("8.8.8.0/24".to_string()),
-    })
+    lookup_asn_ipapi(&client, ip).await
 }
 
-async fn lookup_asn_ipapi(client: &HttpClient, ip: IpAddr) -> Result<AsnInfo> {
+async fn lookup_asn_ipapi(client: &HttpClient, ip: IpAddr) -> Result<Option<AsnInfo>> {
     let url = format!("http://ip-api.com/json/{}?fields=as,org,country", ip);
     let response = client.get(&url).await?;
     let api_response: IpApiAsnResponse = serde_json::from_str(&response)?;
-    
-    // Parse ASN from format "AS15169 Google LLC"
-    let (asn, org) = if let Some(as_info) = &api_response.asn {
-        if let Some(space_pos) = as_info.find(' ') {
-            let asn_str = &as_info[2..space_pos]; // Skip "AS" prefix
-            let org = &as_info[space_pos + 1..];
-            (
-                asn_str.parse::<u32>().unwrap_or(0),
-                org.to_string()
-            )
-        } else {
-            (0, as_info.clone())
+
+    if let Some(as_field) = api_response.asn.clone() {
+        if let Some((asn, org)) = extract_asn_fields(&as_field, api_response.organization.clone()) {
+            return Ok(Some(AsnInfo {
+                asn: Some(asn),
+                org: if org.is_empty() { None } else { Some(org) },
+                country: api_response.country,
+                registry: None,
+                allocated: None,
+                prefix: None,
+            }));
         }
+    }
+
+    if let Some(org) = api_response.organization {
+        return Ok(Some(AsnInfo {
+            asn: None,
+            org: if org.is_empty() { None } else { Some(org) },
+            country: api_response.country,
+            registry: None,
+            allocated: None,
+            prefix: None,
+        }));
+    }
+
+    Ok(None)
+}
+
+fn extract_asn_fields(as_field: &str, fallback_org: Option<String>) -> Option<(u32, String)> {
+    let trimmed = as_field.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Some(space_pos) = trimmed.find(' ') {
+        let (asn_part, org_part) = trimmed.split_at(space_pos);
+        let asn_number = asn_part.trim_start_matches("AS").parse::<u32>().ok()?;
+        let org = org_part.trim().to_string();
+        if org.is_empty() {
+            let fallback = fallback_org.unwrap_or_default();
+            return Some((asn_number, fallback));
+        }
+        Some((asn_number, org))
     } else {
-        (0, api_response.organization.unwrap_or_else(|| "Unknown".to_string()))
-    };
-    
-    Ok(AsnInfo {
-        asn,
-        org,
-        country: api_response.country,
-        registry: None,
-        allocated: None,
-        prefix: None,
-    })
+        let asn_number = trimmed.trim_start_matches("AS").parse::<u32>().ok()?;
+        let org = fallback_org.unwrap_or_default();
+        Some((asn_number, org))
+    }
 }
