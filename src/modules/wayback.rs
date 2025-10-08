@@ -16,10 +16,15 @@ pub struct Snapshot {
     pub status_code: Option<String>,
 }
 pub async fn run(args: WaybackArgs) -> Result<()> {
-    println!("{} Wayback Machine lookup: {}", style("🕰").cyan(), style(&args.url).yellow().bold());
+    println!(
+        "{} Wayback Machine lookup: {}",
+        style("🕰").cyan(),
+        style(&args.url).yellow().bold()
+    );
     let client = HttpClient::new()?;
     let mut snapshots = vec![];
-    let api_url = format!("https://web.archive.org/cdx/search/cdx?url={}&output=json&limit={}",
+    let api_url = format!(
+        "https://web.archive.org/cdx/search/cdx?url={}&output=json&limit={}",
         urlencoding::encode(&args.url),
         args.limit.unwrap_or(10)
     );
@@ -27,10 +32,13 @@ pub async fn run(args: WaybackArgs) -> Result<()> {
         Ok(response) => {
             if let Ok(data) = serde_json::from_str::<Vec<Vec<String>>>(&response) {
                 for (i, row) in data.iter().enumerate() {
-                    if i == 0 { continue; }
+                    if i == 0 {
+                        continue;
+                    }
                     if row.len() >= 3 {
                         let timestamp = &row[1];
-                        let archived_url = format!("https://web.archive.org/web/{}/{}", timestamp, &row[2]);
+                        let archived_url =
+                            format!("https://web.archive.org/web/{}/{}", timestamp, &row[2]);
                         if let Some(year_filter) = &args.year {
                             if !timestamp.starts_with(year_filter) {
                                 continue;
@@ -78,17 +86,26 @@ fn display_results(result: &WaybackResult) {
     println!("\n{}", style("Wayback Machine Results:").green().bold());
     println!("{}", style("════════════════════════").cyan());
     println!("  {} {}", style("URL:").yellow(), style(&result.url).cyan());
-    println!("  {} {}", style("Snapshots Found:").yellow(), style(result.total_found.to_string()).green());
+    println!(
+        "  {} {}",
+        style("Snapshots Found:").yellow(),
+        style(result.total_found.to_string()).green()
+    );
     if result.snapshots.is_empty() {
         println!("\n{} No snapshots found", style("✗").red());
         return;
     }
     println!("\n{}", style("Available Snapshots:").yellow());
     for (i, snapshot) in result.snapshots.iter().enumerate() {
-        println!("{}. {} {}",
+        println!(
+            "{}. {} {}",
             style((i + 1).to_string()).cyan(),
             style(&snapshot.timestamp).yellow(),
-            if snapshot.status_code.as_deref() == Some("200") { style("✓").green() } else { style("⚠").yellow() }
+            if snapshot.status_code.as_deref() == Some("200") {
+                style("✓").green()
+            } else {
+                style("⚠").yellow()
+            }
         );
         println!("   {}", style(&snapshot.url).blue().underlined());
     }
