@@ -1,10 +1,10 @@
-use std::env;
-use std::path::PathBuf;
-use std::fs;
-use std::process::Command;
+use anyhow::Result;
 use console::style;
 use dialoguer::{Confirm, Select};
-use anyhow::Result;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::process::Command;
 pub async fn force_setup() -> Result<()> {
     println!("\n{}", style("🔧 BUIT Installation Setup").cyan().bold());
     println!("{}", style("══════════════════════════").cyan());
@@ -25,8 +25,16 @@ pub fn check_and_setup() -> Result<()> {
     Ok(())
 }
 fn is_in_path() -> bool {
-    let binary_name = if cfg!(target_os = "windows") { "buit.exe" } else { "buit" };
-    let which_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    let binary_name = if cfg!(target_os = "windows") {
+        "buit.exe"
+    } else {
+        "buit"
+    };
+    let which_cmd = if cfg!(target_os = "windows") {
+        "where"
+    } else {
+        "which"
+    };
     if let Ok(output) = Command::new(which_cmd).arg(binary_name).output() {
         if output.status.success() && !output.stdout.is_empty() {
             return true;
@@ -37,7 +45,13 @@ fn is_in_path() -> bool {
 fn should_offer_setup(current_exe: &PathBuf) -> bool {
     let exe_str = current_exe.to_string_lossy().to_lowercase();
     let common_paths = if cfg!(target_os = "windows") {
-        vec!["program files", "windows", "system32", "c:\\tools", "appdata"]
+        vec![
+            "program files",
+            "windows",
+            "system32",
+            "c:\\tools",
+            "appdata",
+        ]
     } else {
         vec!["/usr/local/bin", "/usr/bin", "/bin", "/opt", "/.local/bin"]
     };
@@ -49,20 +63,26 @@ fn should_offer_setup(current_exe: &PathBuf) -> bool {
     } else {
         vec!["downloads", "desktop", "tmp", "/tmp", "documents"]
     };
-    temp_paths.iter().any(|path| exe_str.contains(path)) ||
-    !common_paths.iter().any(|path| exe_str.contains(path))
+    temp_paths.iter().any(|path| exe_str.contains(path))
+        || !common_paths.iter().any(|path| exe_str.contains(path))
 }
 fn offer_auto_setup() -> Result<()> {
     println!("\n{}", style("🚀 BUIT First-Time Setup").cyan().bold());
     println!("{}", style("══════════════════════════").cyan());
-    println!("\n{} BUIT is not installed in your system PATH.", style("ℹ️").blue());
+    println!(
+        "\n{} BUIT is not installed in your system PATH.",
+        style("ℹ️").blue()
+    );
     println!("Would you like to install it automatically for easier access?");
     if !Confirm::new()
         .with_prompt("Install BUIT to system PATH?")
         .default(true)
         .interact()?
     {
-        println!("\n{} Setup skipped. You can run BUIT from its current location.", style("⏭️").yellow());
+        println!(
+            "\n{} Setup skipped. You can run BUIT from its current location.",
+            style("⏭️").yellow()
+        );
         return Ok(());
     }
     let install_options = get_install_options();
@@ -100,7 +120,7 @@ fn install_to_location(selection: usize) -> Result<()> {
             path.push("Programs");
             path.push("buit");
             path
-        },
+        }
         _ => {
             println!("Enter custom installation path:");
             let mut input = String::new();
@@ -109,12 +129,21 @@ fn install_to_location(selection: usize) -> Result<()> {
         }
     };
     fs::create_dir_all(&target_dir)?;
-    let binary_name = if cfg!(target_os = "windows") { "buit.exe" } else { "buit" };
+    let binary_name = if cfg!(target_os = "windows") {
+        "buit.exe"
+    } else {
+        "buit"
+    };
     let target_exe = target_dir.join(binary_name);
     fs::copy(&current_exe, &target_exe)?;
-    println!("\n✅ {} installed to: {}", style("BUIT").green().bold(), target_dir.display());
+    println!(
+        "\n✅ {} installed to: {}",
+        style("BUIT").green().bold(),
+        target_dir.display()
+    );
     add_to_windows_path(&target_dir)?;
-    println!("\n{} {} {}",
+    println!(
+        "\n{} {} {}",
         style("🎉").green(),
         style("Installation complete!").green().bold(),
         "Restart your terminal to use 'buit' from anywhere."
@@ -133,7 +162,7 @@ fn install_to_location(selection: usize) -> Result<()> {
             fs::create_dir_all(&path)?;
             path.push("buit");
             path
-        },
+        }
         _ => {
             println!("Enter custom installation path:");
             let mut input = String::new();
@@ -148,7 +177,10 @@ fn install_to_location(selection: usize) -> Result<()> {
             .arg(&target_path)
             .status()?;
         if !status.success() {
-            println!("❌ {} Installation failed. Try running with sudo.", style("Error:").red());
+            println!(
+                "❌ {} Installation failed. Try running with sudo.",
+                style("Error:").red()
+            );
             return Ok(());
         }
         Command::new("sudo")
@@ -158,14 +190,16 @@ fn install_to_location(selection: usize) -> Result<()> {
             .status()?;
     } else {
         fs::copy(&current_exe, &target_path)?;
-        Command::new("chmod")
-            .arg("+x")
-            .arg(&target_path)
-            .status()?;
+        Command::new("chmod").arg("+x").arg(&target_path).status()?;
         add_to_user_path()?;
     }
-    println!("\n✅ {} installed to: {}", style("BUIT").green().bold(), target_path.display());
-    println!("\n{} {} {}",
+    println!(
+        "\n✅ {} installed to: {}",
+        style("BUIT").green().bold(),
+        target_path.display()
+    );
+    println!(
+        "\n{} {} {}",
         style("🎉").green(),
         style("Installation complete!").green().bold(),
         "You can now run 'buit' from anywhere!"
@@ -195,7 +229,10 @@ fn add_to_windows_path(dir: &PathBuf) -> Result<()> {
         .output();
     match output {
         Ok(_) => println!("📝 Added to Windows PATH"),
-        Err(_) => println!("⚠️  Please add {} to your PATH manually", style(dir_str).yellow()),
+        Err(_) => println!(
+            "⚠️  Please add {} to your PATH manually",
+            style(dir_str).yellow()
+        ),
     }
     Ok(())
 }
@@ -230,7 +267,10 @@ fn add_to_user_path() -> Result<()> {
         if PathBuf::from(&config_file).exists() {
             let content = fs::read_to_string(&config_file).unwrap_or_default();
             if !content.contains(&local_bin) {
-                let path_line = format!("\n# Added by BUIT installer\nexport PATH=\"$PATH:{}\"\n", local_bin);
+                let path_line = format!(
+                    "\n# Added by BUIT installer\nexport PATH=\"$PATH:{}\"\n",
+                    local_bin
+                );
                 if let Ok(_) = fs::write(&config_file, format!("{}{}", content, path_line)) {
                     println!("📝 Added ~/.local/bin to PATH in {}", config_file);
                     path_added = true;
@@ -244,18 +284,25 @@ fn add_to_user_path() -> Result<()> {
         }
     }
     if !path_added && PathBuf::from(format!("{}/.oh-my-zsh", home)).exists() {
-        let custom_content = format!("# BUIT PATH configuration\nexport PATH=\"$PATH:{}\"\n", local_bin);
+        let custom_content = format!(
+            "# BUIT PATH configuration\nexport PATH=\"$PATH:{}\"\n",
+            local_bin
+        );
         if let Ok(_) = fs::write(&custom_zsh, custom_content) {
             println!("📝 Created oh-my-zsh custom config: {}", custom_zsh);
             path_added = true;
         }
     }
     if !path_added {
-        println!("⚠️  Please add {} to your PATH manually", style(local_bin).yellow());
+        println!(
+            "⚠️  Please add {} to your PATH manually",
+            style(local_bin.clone()).yellow()
+        );
         println!("   Add this line to your shell config:");
         println!("   export PATH=\"$PATH:{}\"", style(local_bin).cyan());
     } else {
-        println!("🔄 Please restart your terminal or run: source ~/.{}rc",
+        println!(
+            "🔄 Please restart your terminal or run: source ~/.{}rc",
             if shell.contains("zsh") { "zsh" } else { "bash" }
         );
     }
